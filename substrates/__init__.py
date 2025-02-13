@@ -1,5 +1,7 @@
 import jax
 import evosax
+from functools import partial
+import numpy as np
 
 from .boids import Boids
 from .lenia import Lenia
@@ -9,6 +11,10 @@ from .plenia import ParticleLenia
 from .dnca import DNCA
 from .nca import NCA
 from .gol import GameOfLife
+from .flenia import FlowLenia, ConfigFL
+from .flenia_params import FlowLeniaParams, ConfigFLP, beam_mutation
+from .flenia_utils import *
+
 
 
 def create_substrate(substrate_name):
@@ -30,6 +36,7 @@ def create_substrate(substrate_name):
         - 'nca_d1': NCA with d_state=1
         - 'nca_d3': NCA with d_state=3
         - 'gol': GameOfLife
+        - 'flenia': FlowLenia
     """
     rollout_steps = 1000
     if substrate_name=='boids':
@@ -52,6 +59,16 @@ def create_substrate(substrate_name):
     elif substrate_name=='gol':
         substrate = GameOfLife(grid_size=64)
         rollout_steps = 1024
+    elif substrate_name=='flenia':
+        substrate = FlowLenia(ConfigFL(X=64, Y=64, C=3, k=9)) # add params
+    elif substrate_name=='flenia_params':
+        cfg = ConfigFLP(X=128, Y=128, C=3, k=9)
+        M = np.array([[2, 1, 0],
+                    [0, 2, 1],
+                    [1, 0, 2]])
+        c0, c1 = conn_from_matrix(M)
+        cfg = cfg._replace(c0=c0, c1=c1)
+        substrate = FlowLeniaParams(cfg, callback=partial(beam_mutation, sz=20, p=0.1))
     else:
         raise ValueError(f"Unknown substrate name: {substrate_name}")
     substrate.name = substrate_name
