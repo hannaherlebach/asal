@@ -25,7 +25,7 @@ mat_1 = np.array([[3, 1, 0],
 
 
 class FlowLenia:
-    def __init__(self, grid_size=128, n_channels=1, c0=[0], c1=[[0]], k=9, dd=5, dt=0.2, sigma=0.65, border="wall", seed=42, matrix=mat_1):
+    def __init__(self, grid_size=128, C=1, c0=[0], c1=[[0]], k=9, dd=5, dt=0.2, sigma=0.65, border="wall", seed=42, matrix=mat_1):
         self.grid_size = grid_size
 
         # Set up channels using matrix
@@ -34,7 +34,7 @@ class FlowLenia:
             c0, c1 = conn_from_matrix(matrix)
             C = matrix.shape[0]
 
-        self.config_flenia = ConfigFLenia(X=grid_size, Y=grid_size, C=n_channels, c0=c0, c1=c1, k=k, dd=dd, dt=dt, sigma=sigma, border=border)
+        self.config_flenia = ConfigFLenia(X=grid_size, Y=grid_size, C=C, c0=c0, c1=c1, k=k, dd=dd, dt=dt, sigma=sigma, border=border)
         key = jax.random.PRNGKey(seed)
         self.flenia = FlowLeniaImpl(self.config_flenia, key)
 
@@ -53,8 +53,10 @@ class FlowLenia:
     def init_state(self, rng, params):
         rng, rng_init = split(rng)
         s = self.flenia.initialize(rng_init)
-        locs = jnp.arange(40) + (self.config_flenia.X//2-10)
-        A = s.A.at[jnp.ix_(locs, locs)].set(jax.random.uniform(rng, (40, 40, self.config_flenia.C)))
+        # n = int(self.grid_size/3) # don't know why
+        # locs = jnp.arange(n) + (self.config_flenia.X//2-10)
+        # A = s.A.at[jnp.ix_(locs, locs)].set(jax.random.uniform(rng, (40, 40, self.config_flenia.C)))
+        A = s.A.at[44:84, 44:84, :].set(jax.random.uniform(rng, (40, 40, self.config_flenia.C)))
         s = s._replace(A=A)
 
         return s # Can I leave as is?
@@ -67,6 +69,8 @@ class FlowLenia:
     def render_state(self, state, params, img_size=None):
         A = state.A # I think this is right?
         C = A.shape[-1]
+        # C = self.config_flenia.C
+        print(f"{C=}")
         if C==1:
             img = A
         elif C==2:
