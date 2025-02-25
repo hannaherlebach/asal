@@ -77,6 +77,27 @@ from collections import namedtuple
 
 import jax
 import jax.numpy as jnp
+import scipy as sp
+
+# Set fft to use scipy if on Metal, since jnp.fft not supported
+if jax.default_backend() == "METAL":
+	print("Detected METAL, using scipy.fft")
+	def fft2(x, axes):
+		x_np = jnp.asarray(x).block_until_ready()
+		# x_np = x_np.astype(complex)
+		return jnp.array(sp.fft.fft2(x_np, axes=axes))
+	def ifft2(x, axes):
+		x_np = jnp.asarray(x).block_until_ready()
+		# x_np = x_np.astype(complex)
+		return jnp.array(sp.fft.ifft2(x_np, axes=axes))
+	def fftshift(x, axes):
+		x_np = jnp.asarray(x).block_until_ready()
+		# x_np = x_np.astype(complex)
+		return jnp.array(sp.fft.fftshift(x_np, axes=axes))
+else:
+	fft2 = jnp.fft.fft2
+	ifft2 = jnp.fft.ifft2
+	fftshift = jnp.fft.fftshift
 
 # from lenia.patterns import patterns
 
@@ -163,7 +184,7 @@ class Lenia:
 		Ks = [(D<len(k['b'])) * jnp.asarray(k['b'])[jnp.minimum(D.astype(int),len(k['b'])-1)] * bell(D%1, 0.5, 0.15) for D,k in zip(Ds, kernels)]  # (x, y,)*k
 		K = jnp.dstack(Ks)  # (y, x, k,), kernels
 		nK = K / jnp.sum(K, axis=(0, 1), keepdims=True)  # (y, x, k,), normalized kernels
-		fK = jnp.fft.fft2(jnp.fft.fftshift(nK, axes=(0, 1)), axes=(0, 1))  # (y, x, k,), FFT of kernels
+		fK = fft2(fftshift(nK, axes=(0, 1)), axes=(0, 1))  # (y, x, k,), FFT of kernels
 
 		# pad pattern cells into initial cells (to be put in genotype)
 		cy, cx = cells.shape[0], cells.shape[1]
@@ -210,9 +231,9 @@ class Lenia:
 		A = jnp.roll(A, -last_shift, axis=(-3, -2))  # (y, x, c,)
 
 		# Lenia step
-		fA = jnp.fft.fft2(A, axes=(-3, -2))  # (y, x, c,)
+		fA = fft2(A, axes=(-3, -2))  # (y, x, c,)
 		fA_k = jnp.dot(fA, reshape_c_k)  # (y, x, k,)
-		U_k = jnp.real(jnp.fft.ifft2(fK * fA_k, axes=(-3, -2)))  # (y, x, k,)
+		U_k = jnp.real(ifft2(fK * fA_k, axes=(-3, -2)))  # (y, x, k,)
 		G_k = growth(U_k, m, s) * h  # (y, x, k,)
 		G = jnp.dot(G_k, reshape_k_c)  # (y, x, c,)
 		next_A = jnp.clip(A + 1/T * G, 0, 1)  # (y, x, c,)
