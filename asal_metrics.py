@@ -22,6 +22,25 @@ def calc_supervised_target_score(z, z_txt):
     kernel = z_txt @ z.T # T, T
     return -jnp.diag(kernel).mean()
 
+def calc_reconstruction_loss(z_txt, z_desc):
+    """
+    Calculates the reconstruction loss from ASAL.
+    The returned score should be minimized.
+
+    Parameters
+    ----------
+    z_txt : jnp.ndarray of shape (T2, D)
+        The latent representation of the text prompts over time.
+    z_desc : jnp.ndarray of shape (T, D)
+        The latent representation of the descriptions over time.
+    """
+    T, T2 = z_desc.shape[0], z_txt.shape[0]
+    assert T % T2 == 0
+    z_txt = repeat(z_txt, "T2 D -> (k T2) D", k=T//T2) # repeat to match shape, creating even intervals for each prompt
+
+    kernel = z_txt @ z_desc.T # T, T
+    return -jnp.diag(kernel).mean()
+
 def calc_supervised_target_softmax_score(z, z_txt, temperature_softmax=0.01):
     """
     Calculates the supervisted target score from ASAL with softmax.
