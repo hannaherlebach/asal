@@ -12,6 +12,7 @@ from .dnca import DNCA
 from .nca import NCA
 from .gol import GameOfLife
 from .flenia import FlowLenia
+from .flenia_alt import FlowLenia as FlowLeniaAlt
 # from .flenia_params import FlowLeniaParams, ConfigFLP, beam_mutation
 
 
@@ -59,6 +60,8 @@ def create_substrate(substrate_name, **kwargs):
         rollout_steps = 1024
     elif substrate_name=='flenia':
         substrate = FlowLenia(grid_size=128, **kwargs)
+    elif substrate_name=='flenia_alt':
+        substrate = FlowLeniaAlt(grid_size=128, **kwargs)
     elif substrate_name=='flenia_params':
         raise NotImplementedError
     else:
