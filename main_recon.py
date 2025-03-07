@@ -95,10 +95,10 @@ def parse_args(*args, **kwargs):
 def main(args):
     prompts = args.prompts.split(";")
     # Splitting prompts allows multiple targets (Eq. (2) in ASAL can be extended over time)
-    if args.time_sampling < len(
-        prompts
-    ):  # If we have more prompts than frames, match them
-        args.time_sampling = len(prompts)
+    # if args.time_sampling < len(
+    #     prompts
+    # ):  # If we have more prompts than frames, match them
+    #     args.time_sampling = len(prompts)
     print(args)
 
     # Create a video-language model for similarity scoring and reconstruction
@@ -121,98 +121,135 @@ def main(args):
             substrate.rollout_steps
         )  # Use default steps if none provided
     
+    # This partial function returns a dictionary with:
+    #   "z":  the image embeddings (already in the FM's space)
+    #   "rgb": a list/array of frames
     rollout_fn = partial(
         rollout_simulation,
         s0=None,
         substrate=substrate,
         fm=fm,
         rollout_steps=args.rollout_steps,
-        time_sampling='video',
+        time_sampling="video",  # capture all frames
         img_size=224,
         return_state=False,
     )
-    # This function simulates and renders images for scoring
 
-    z_txt = fm.embed_txt(prompts)  # P x D (text embedding for each prompt)
-    # This is the supervised target vector in the FM space
+    # Text embedding of the (one or more) prompts
+    print(prompts)
+    z_txt = fm.embed_txt(prompts)  # shape [P, D]
 
-    rng = jax.random.PRNGKey(args.seed)  # Random key for reproducibility
+    rng = jax.random.PRNGKey(args.seed)
     strategy = evosax.Sep_CMA_ES(
         popsize=args.pop_size, num_dims=substrate.n_params, sigma_init=args.sigma
     )
-    # Using a specialized Evolution Strategy (Sep-CMA-ES) to optimize
     es_params = strategy.default_params
-    rng, _rng = split(rng)
-    es_state = strategy.initialize(_rng, es_params)
 
-    def calc_loss(rng, params):
-        # Calculates the alignment loss based on the simulation + FM embeddings
+    # Initialize the ES state
+    rng, init_rng = split(rng)
+    es_state = strategy.initialize(init_rng, es_params)
+
+    def compute_loss_unbatched(rng, params):
+        """
+        1) Run the substrate + FM to get frames and embeddings (rollout_fn).
+        2) Convert frames from JAX -> NumPy, call PIL/HF code.
+        3) Compute losses in normal Python space, return a Python float and dict.
+        """
+        # Run JAX-based simulation
         rollout_data = rollout_fn(rng, params)
-        z = rollout_data["z"]  # Captured image embeddings
+        z_frames = rollout_data["z"]  # shape [rollout_length, D]
+        rgb_frames = rollout_data["rgb"]  # JAX array of shape [T, H, W, 3]
 
-        # Generate a description for the video
-        vtm_desc = vtm.describe_video(rollout_data["imgs"], sample_rate=20)
+        # Convert frames to NumPy (outside jit/vmap)
+        video_frames = np.array((rgb_frames * 255).clip(0, 255), dtype=np.uint8)
 
-        # Calculate ASAL losses
+        # Use the video-text model to describe the video (PIL, HF calls)
+        vtm_desc = vtm.describe_video(video_frames, sample_rate=20)
+        print("Video Model Description:", vtm_desc)
         z_desc = fm.embed_txt([vtm_desc])
-        loss_recon = asal_metrics.calc_reconstruction_loss(z_txt, z_desc)
-        loss_prompt = asal_metrics.calc_supervised_target_score(z, z_txt)
-        loss_softmax = asal_metrics.calc_supervised_target_softmax_score(z, z_txt)
-        loss_oe = asal_metrics.calc_open_endedness_score(z)
-        # Weighted combination of different ASAL objectives (Eq. (2) or (3) in the paper)
 
+        # Different ASAL losses
+        loss_recon = asal_metrics.calc_reconstruction_loss(z_txt, z_desc)
+        loss_prompt = asal_metrics.calc_supervised_target_score(z_frames, z_txt)
+        loss_softmax = asal_metrics.calc_supervised_target_softmax_score(z_frames, z_txt)
+        loss_oe = asal_metrics.calc_open_endedness_score(z_frames)
+
+        # Weighted sum
         loss = (
-            loss_prompt * args.coef_prompt
-            + loss_softmax * args.coef_softmax
-            + loss_oe * args.coef_oe
-            + loss_recon * args.coef_recon
+            args.coef_prompt * loss_prompt
+            + args.coef_softmax * loss_softmax
+            + args.coef_oe * loss_oe
+            + args.coef_recon * loss_recon
         )
         loss_dict = dict(
             loss=loss,
             loss_prompt=loss_prompt,
             loss_softmax=loss_softmax,
             loss_oe=loss_oe,
+            loss_recon=loss_recon,
         )
-        return loss, loss_dict
+        return float(loss), loss_dict  # Return Python floats
 
-    @jax.jit
     def do_iter(es_state, rng):
-        # Performs one iteration (ask/tell) of the ES optimization
-        rng, _rng = split(rng)
-        params, next_es_state = strategy.ask(_rng, es_state, es_params)
-        calc_loss_vv = jax.vmap(
-            jax.vmap(calc_loss, in_axes=(0, None)), in_axes=(None, 0)
+        """
+        One iteration of evolution:
+          1) Ask for a population of parameter vectors
+          2) Evaluate each using a normal Python loop (avoids JAX tracer -> PIL issues)
+          3) Tell the ES the fitness values
+        """
+        rng, ask_rng = split(rng)
+        params_pop, next_es_state = strategy.ask(ask_rng, es_state, es_params)
+
+        # Evaluate each member (and average over bs random seeds)
+        pop_losses = []
+        pop_loss_dicts = []
+        for params_i in params_pop:
+            # Optionally evaluate multiple init states
+            accum_loss = 0.0
+            accum_dict = None
+            for _ in range(args.bs):
+                rng, roll_rng = split(rng)
+                loss_val, loss_dict = compute_loss_unbatched(roll_rng, params_i)
+                accum_loss += loss_val
+                accum_dict = loss_dict
+            mean_loss = accum_loss / args.bs
+            pop_losses.append(mean_loss)
+            pop_loss_dicts.append(accum_dict)
+
+        # Convert losses to JAX array
+        pop_losses_jax = jnp.array(pop_losses, dtype=jnp.float32)
+        
+        # Update the ES
+        next_es_state = strategy.tell(params_pop, pop_losses_jax, next_es_state, es_params)
+        
+        # Return the ES state plus any data you want to record
+        data_out = dict(
+            best_loss=next_es_state.best_fitness,
+            loss_dict=pop_loss_dicts,  # or you could just store the mean or best
         )
-        # vmap over multiple initial seeds (bs) and population
-        rng, _rng = split(rng)
-        loss, loss_dict = calc_loss_vv(split(_rng, args.bs), params)
-        loss, loss_dict = jax.tree.map(lambda x: x.mean(axis=1), (loss, loss_dict))
-        # Average losses over multiple initial seeds
-        next_es_state = strategy.tell(params, loss, next_es_state, es_params)
-        data = dict(best_loss=next_es_state.best_fitness, loss_dict=loss_dict)
-        return next_es_state, data
+        return next_es_state, data_out
 
+    # Main ES loop
     data = []
-    pbar = tqdm(range(args.n_iters))  # Progress bar for ES iterations
+    pbar = tqdm(range(args.n_iters))
     for i_iter in pbar:
-        rng, _rng = split(rng)
-        es_state, di = do_iter(es_state, _rng)
-
+        rng, iter_rng = split(rng)
+        es_state, di = do_iter(es_state, iter_rng)
         data.append(di)
+
+        # Live progress
         pbar.set_postfix(best_loss=es_state.best_fitness.item())
-        # Shows the best fitness (lowest alignment loss) so far
+
+        # Periodic saving
         if args.save_dir is not None and (
             i_iter % (args.n_iters // 10) == 0 or i_iter == args.n_iters - 1
         ):
-            # Periodically save data
-            data_save = jax.tree.map(lambda *x: np.array(jnp.stack(x, axis=0)), *data)
+            data_save = jax.tree_map(lambda *x: np.array(jnp.stack(x, axis=0)), *data)
             util.save_pkl(args.save_dir, "data", data_save)
-            best = jax.tree.map(
-                lambda x: np.array(x), (es_state.best_member, es_state.best_fitness)
-            )
-            util.save_pkl(args.save_dir, "best", best)
-            # 'best' stores the best parameters that produce emergent behavior aligning with prompts
 
+            best_tuple = (es_state.best_member, es_state.best_fitness)
+            best = jax.tree_map(lambda x: np.array(x), best_tuple)
+            util.save_pkl(args.save_dir, "best", best)
 
 if __name__ == "__main__":
     main(parse_args())
