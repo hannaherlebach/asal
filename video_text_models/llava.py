@@ -72,7 +72,7 @@ class LLAVA:
         ).to(self.device, self.torch_dtype)
 
         # Generate response
-        output_ids = self.model.generate(**inputs, max_new_tokens=200, do_sample=False)
+        output_ids = self.model.generate(**inputs, max_new_tokens=70, do_sample=False)
         
         # Strip out the system tokens and partial user prompt
         # The [2:] is often used to remove system tokens; adjust as necessary
