@@ -36,13 +36,16 @@ class FlowLenia:
             c0, c1 = conn_from_matrix(matrix)
             C = matrix.shape[0]
 
-        self.config_flenia = ConfigFLenia(SX=grid_size, SY=grid_size, C=C, c0=c0, c1=c1, nb_k=k, dd=dd, dt=dt, sigma=sigma, theta_A=theta_A, border=border)
+        self.cfg = ConfigFLenia(SX=grid_size, SY=grid_size, C=C, c0=c0, c1=c1, nb_k=k, dd=dd, dt=dt, sigma=sigma, theta_A=theta_A, border=border)
 
-        self.flenia = FlowLeniaImpl(self.config_flenia)
+        self.flenia = FlowLeniaImpl(self.cfg)
         self.step_fn = self.flenia._build_step_fn()
         self.compile_params = compile_kernel_computer(SX=grid_size, SY=grid_size, nb_k=k)
 
-    def default_params(self, rng):
+    def default_params(self, rng) -> Params:
+        """
+        Samples a random set of parameters. Returns a Params object.
+        """
         params = self.flenia.rule_space.sample(rng)
         return params # Unsure if these are the right shape!
 
@@ -50,7 +53,16 @@ class FlowLenia:
         """
         Note that in this version, State only has one field A, doesn't have fK.
         """
-        A = jnp.zeros((self.config_flenia.SX, self.config_flenia.SY, self.config_flenia.C))
+        A = jnp.zeros((self.cfg.SX, self.cfg.SY, self.cfg.C))
+        # EXTRA ---
+
+        # A = A.at[44:84, 44:84, :].set(jax.random.uniform(rng, (40, 40, self.cfg.C)))
+        # ---
+        # TODO
+        # Add uniform random noise to the centre third of the grid
+        loc_x, loc_y = (self.cfg.SX//2, self.cfg.SY//2)
+        dist = (self.cfg.SX//6, self.cfg.SY//6)
+        A = A.at[loc_x-dist[0]:loc_x+dist[0], loc_y-dist[1]:loc_y+dist[1], :].set(jax.random.uniform(rng, (2*dist[0], 2*dist[1], self.cfg.C)))
         return State(A=A)
 
     def step_state(self, rng, state, params):

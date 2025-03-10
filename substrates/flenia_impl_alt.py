@@ -622,7 +622,7 @@ if __name__=="__main__":
 
     c_params = compile_kernel_computer(128, 128, k)(params)
 
-    traj = fl.rollout_fn(fl.kernel_computer(params), state, 5000)
+    traj = fl.rollout_fn(fl.kernel_computer(params), state, 1000)
     # traj[0] is tuple length 2, 0 item is FL_State, 1st item is a CompiledParams
     # traj[1] is a FL_State, where A has shape (10, 128, 128, 1) - this is a sequence of images
 
@@ -636,12 +636,12 @@ if __name__=="__main__":
     for i in range(img_sequence.shape[0]):
         im = ax.imshow(img_sequence[i], animated=True)
         ims.append([im])
-    ani = animation.ArtistAnimation(fig, ims, interval=2, blit=True,
+    ani = animation.ArtistAnimation(fig, ims, interval=5, blit=True,
                                     repeat_delay=1000)
     
     # Save as GIF
     save_path = "animations/flenia_impl_alt_2.gif"
     os.makedirs("animations", exist_ok=True)
-    ani.save(save_path, writer=animation.PillowWriter(fps=10))  # Adjust FPS as needed
+    ani.save(save_path, writer=animation.PillowWriter(fps=20))  # Adjust FPS as needed
 
     plt.show()
