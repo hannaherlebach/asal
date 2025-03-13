@@ -18,6 +18,7 @@ from jax.experimental import host_callback
 def sigmoid(x):
     return 0.5 * (jnp.tanh(x / 2) + 1)
 
+# The division by w seems to have been causing the NaNs, so clip it in compute_kernels()
 ker_f = lambda x, a, w, b : (b * jnp.exp( - (x[..., None] - a)**2 / w)).sum(-1)
 
 bell = lambda x, m, s: jnp.exp(-((x-m)/s)**2 / 2)
@@ -305,12 +306,19 @@ def compile_kernel_computer(SX: int, SY: int, nb_k: int)->t.Callable[[Params], C
         Returns:
             CompiledParams: compiled params which can be used in update rule
         """
+        # HANNAH ADDED - clipping w to prevent 0 division in ker_f
+        params.w = jnp.clip(params.w, 1e-10, None)
 
         Ds = [ np.linalg.norm(np.mgrid[-mid:mid, -mid:mid], axis=0) /
               ((params.R+15) * params.r[k]) for k in range(nb_k) ]  # (x,y,k)
         K = jnp.dstack([sigmoid(-(D-1)*10) * ker_f(D, params.a[k], params.w[k], params.b[k])
                         for k, D in zip(range(nb_k), Ds)])
-        nK = K / jnp.sum(K, axis=(0,1), keepdims=True)  # Normalize kernels
+        
+        # Debugging - count number of NaN values in K if optimisation stops working
+        # jax.debug.print("Number of NaNs in K: {x}", x=jnp.sum(jnp.isnan(K)))
+
+        # HANNAH ADDED - add eps to prevent 0 division
+        nK = K / (jnp.sum(K, axis=(0,1), keepdims=True) + 1e-10)  # Normalize kernels
         fK = jnp.fft.fft2(jnp.fft.fftshift(nK, axes=(0,1)), axes=(0,1))  # Get kernels fft
 
         return CompiledParams(fK=fK, m=params.m, s=params.s, h=params.h)
