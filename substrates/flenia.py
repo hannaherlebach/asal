@@ -1,18 +1,18 @@
-
-import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
 from einops import rearrange, reduce, repeat
 from jax.random import split
+from collections import namedtuple
 
-from .flenia_impl import Config as ConfigFLenia
+from .flenia_impl import FL_Config as ConfigFLenia
 from .flenia_impl import FlowLenia as FlowLeniaImpl
-from .flenia_impl import conn_from_matrix
+from .flenia_impl import FL_State as State
+from .flenia_impl import Params, CompiledParams
+from .flenia_impl import conn_from_matrix, compile_kernel_computer
 
 """
-The Flow Lenia substrate.
-The implementation of Flow Lenia is from https://github.com/erwanplantec/FlowLenia/tree/main/flowlenia.
+Wrapper for FlowLenia alternative, to work with evosax.
 """
 
 # Maybe make these a dict
@@ -23,9 +23,11 @@ mat_1 = np.array([[3, 1, 0],
               [0, 3, 1],
               [1, 0, 3]], dtype=int)
 
-
 class FlowLenia:
-    def __init__(self, grid_size=128, C=1, c0=[0], c1=[[0]], k=9, dd=5, dt=0.2, sigma=0.65, border="wall", seed=42, matrix=mat_1):
+    """
+    This class wraps FlowLeniaImpl ALT to work with ASAL.
+    """
+    def __init__(self, grid_size=128, C=1, c0=[0], c1=[[0]], k=9, dd=5, dt=0.2, sigma=0.65, n=2, theta_A: float=1., border="wall", matrix=mat_1):
         self.grid_size = grid_size
 
         # Set up channels using matrix
@@ -34,38 +36,49 @@ class FlowLenia:
             c0, c1 = conn_from_matrix(matrix)
             C = matrix.shape[0]
 
-        self.config_flenia = ConfigFLenia(X=grid_size, Y=grid_size, C=C, c0=c0, c1=c1, k=k, dd=dd, dt=dt, sigma=sigma, border=border)
-        key = jax.random.PRNGKey(seed)
-        self.flenia = FlowLeniaImpl(self.config_flenia, key)
+        self.cfg = ConfigFLenia(SX=grid_size, SY=grid_size, C=C, c0=c0, c1=c1, nb_k=k, dd=dd, dt=dt, sigma=sigma, theta_A=theta_A, border=border)
 
-        # clip?
+        self.flenia = FlowLeniaImpl(self.cfg)
+        self.step_fn = self.flenia.step_fn
+        self.compile_params = compile_kernel_computer(SX=grid_size, SY=grid_size, nb_k=k)
 
-    def default_params(self, rng):
-        # Unsure whether to return the params attached to self.flenia, or generate some new random ones... depends what they're for
+    def default_params(self, rng) -> Params:
+        """
+        Samples a random set of parameters. Returns a Params object.
+        """
+        params = self.flenia.rule_space.sample(rng)
+        return params # Unsure if these are the right shape!
 
-        # TODO version using rng 
-
-        # Flenia impl never actually uses params... this might be a problem though cos params are what we wanna optimise with ASAL right?
-        return None
-
-        return jnp.array([self.flenia.R, self.flenia.r, self.flenia.m, self.flenia.s, self.flenia.h, self.flenia.a, self.flenia.b, self.flenia.w])
-    
     def init_state(self, rng, params):
-        rng, rng_init = split(rng)
-        s = self.flenia.initialize(rng_init)
-        # n = int(self.grid_size/3) # don't know why
-        # locs = jnp.arange(n) + (self.config_flenia.X//2-10)
-        # A = s.A.at[jnp.ix_(locs, locs)].set(jax.random.uniform(rng, (40, 40, self.config_flenia.C)))
-        A = s.A.at[44:84, 44:84, :].set(jax.random.uniform(rng, (40, 40, self.config_flenia.C)))
-        s = s._replace(A=A)
+        """
+        Note that in this version, State only has one field A, doesn't have fK.
+        """
+        A = jnp.zeros((self.cfg.SX, self.cfg.SY, self.cfg.C))
+       
+        # --- EXTRA added by hannah ---
 
-        return s # Can I leave as is?
+        # --- Hardcoded
+        # A = A.at[44:84, 44:84, :].set(jax.random.uniform(rng, (40, 40, self.cfg.C)))
+        
+        # --- Add uniform random noise to the centre third of the grid
+        loc_x, loc_y = (self.cfg.SX//2, self.cfg.SY//2)
+        dist = (self.cfg.SX//6, self.cfg.SY//6)
+        A = A.at[loc_x-dist[0]:loc_x+dist[0], loc_y-dist[1]:loc_y+dist[1], :].set(jax.random.uniform(rng, (2*dist[0], 2*dist[1], self.cfg.C)))
+        return State(A=A)
 
     def step_state(self, rng, state, params):
-        new_state = self.flenia(state, rng)
+        """
+        Converts params to CompiledParams
+        """
+        
+        compiled_params = self.compile_params(params)
+        
+        # This is what had NaNs - if optimisation stops working, uncomment and check
+        # jax.debug.print("step_state fK: {x}", x=jnp.max(compiled_params.fK))
+        
+        next_state = self.step_fn(state, compiled_params)
+        return next_state
 
-        return new_state # In lenia, this is a dict... now its a namedtuple... fine? unless the type for state is important in ASAL
-    
     def render_state(self, state, params, img_size=None):
         A = state.A # I think this is right?
         C = A.shape[-1]
@@ -80,3 +93,4 @@ class FlowLenia:
         if img_size is not None:
             img = jax.image.resize(img, (img_size, img_size, 3), method='nearest')
         return img
+

@@ -1,13 +1,5 @@
 import os
-os.environ["JAX_PLATFORM_NAME"] = "cpu"
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Disable GPU if necessary
-
 import jax
-jax.config.update("jax_platform_name", "cpu")  # Force CPU usage
-
-print("JAX is using:", jax.default_backend())  # Should print "cpu"
-print("Available devices:", jax.devices())  # Should list only CPU
-
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -18,8 +10,11 @@ from rollout import rollout_simulation
 import asal_metrics
 import jax.numpy as jnp
 
+print("JAX is using:", jax.default_backend())  # Should print "cpu"
+print("Available devices:", jax.devices())  # Should list only CPU
+
 fm = foundation_models.create_foundation_model('clip')
-substrate = substrates.create_substrate('flenia_alt')
+substrate = substrates.create_substrate('flenia')
 rollout_fn = partial(rollout_simulation, s0=None, substrate=substrate, fm=fm, rollout_steps=5000, time_sampling=100, img_size=224, return_state=True) # create the rollout function
 rollout_fn = jax.jit(rollout_fn) # jit for speed
 # now you can use rollout_fn as you need...
@@ -46,8 +41,8 @@ plt.show()
 
 
 # Save animation as a GIF
-save_path = "animations/flenia_test_rollout.gif"
-os.makedirs("animations", exist_ok=True)
-ani.save(save_path, writer=animation.PillowWriter(fps=10))  # Adjust FPS as needed
+# save_path = "animations/flenia_test_rollout.gif"
+# os.makedirs("animations", exist_ok=True)
+# ani.save(save_path, writer=animation.PillowWriter(fps=10))  # Adjust FPS as needed
 
-print(f"Animation saved as {save_path}")
+# print(f"Animation saved as {save_path}")
