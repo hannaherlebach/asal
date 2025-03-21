@@ -1,6 +1,7 @@
 from .clip import CLIP
 from .dino import DINO
 from .pixels import Pixels
+from .gemma import Gemma3
 
 def create_foundation_model(fm_name):
     """
@@ -21,6 +22,8 @@ def create_foundation_model(fm_name):
         fm = DINO()
     elif fm_name=='pixels':
         fm = Pixels()
+    elif fm_name=='gemma3':
+        fm = Gemma3()
     else:
         raise ValueError(f"Unknown foundation model name: {fm_name}")
     return fm
