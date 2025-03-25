@@ -21,6 +21,7 @@ import foundation_models
 from rollout import rollout_simulation
 import asal_metrics
 import util
+from wandb_util import WandbLogger
 
 parser = argparse.ArgumentParser()
 group = parser.add_argument_group("meta")
@@ -54,8 +55,6 @@ def parse_args(*args, **kwargs):
     return args
 
 def main(args):
-    if args.wandb:
-        run = wandb.init(project="alife-project", group="original-asal", entity="ucl-asal", config=vars(args))
 
     prompts = args.prompts.split(";")
     if args.time_sampling < len(prompts): # doing multiple prompts
@@ -69,9 +68,8 @@ def main(args):
         args.rollout_steps = substrate.rollout_steps
     rollout_fn = partial(rollout_simulation, s0=None, substrate=substrate, fm=fm, rollout_steps=args.rollout_steps, time_sampling=(args.time_sampling, True), img_size=224, return_state=False)
 
-    rollout_fn_animate = partial(rollout_simulation, s0=None, substrate=substrate, fm=None, rollout_steps=substrate.rollout_steps, time_sampling='video', img_size=224,
-        return_state=False,
-        )
+    if args.wandb:
+        wandb_logger = WandbLogger(project="alife-project", group="original-asal", entity="ucl-asal", config=vars(args), substrate=substrate)
 
     z_txt = fm.embed_txt(prompts) # P D
 
@@ -120,29 +118,16 @@ def main(args):
             best = jax.tree.map(lambda x: np.array(x), (es_state.best_member, es_state.best_fitness))
             util.save_pkl(args.save_dir, "best", best)
 
-
-        # Log losses to wandb
+        # Log to wandb
         if args.wandb:
-            run.log({"best_loss": di["best_loss"]})
-            best_losses = jax.tree_util.tree_map(lambda x: jnp.min(x), di['loss_dict'])
-            run.log({k: v for k, v in best_losses.items()})
-            # losses = di['loss_dict']
-            # run.log({k: np.array(v) for k, v in losses.items()})
+            wandb_logger.log_losses(di)
 
             if i_iter % (args.n_iters//10)==0:
                 # Log the best video to wandb
                 params, best_loss = util.load_pkl(args.save_dir, "best")
-                
                 rng = jax.random.PRNGKey(args.seed)
-
-                rollout_data = rollout_fn_animate(rng, params)
-
-                img = np.array(rollout_data['rgb']*255).clip(0,255).astype(np.uint8) # rescale to channels, because activations are between 0 and 1
-                
-                img = rearrange(img, "T H W D -> T D H W")
-
                 idx = int(i_iter/args.n_iters * 10)
-                run.log({f"rollout_{idx}": wandb.Video(img, fps=30)}) #rollout_n is n/10 of the way through the run
+                wandb_logger.log_video(rng, params, f"rollout_{idx}") #rollout_n is n/10 of the way through the run
     
 
 if __name__ == '__main__':
