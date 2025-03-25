@@ -1,3 +1,7 @@
+"""
+Updated version of main_opt.py which includes wandb logging.
+"""
+
 import os
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 import argparse
@@ -9,6 +13,8 @@ from jax.random import split
 import numpy as np
 import evosax
 from tqdm.auto import tqdm
+import wandb
+from einops import rearrange
 
 import substrates
 import foundation_models
@@ -20,6 +26,7 @@ parser = argparse.ArgumentParser()
 group = parser.add_argument_group("meta")
 group.add_argument("--seed", type=int, default=0, help="the random seed")
 group.add_argument("--save_dir", type=str, default=None, help="path to save results to")
+group.add_argument("--wandb", action="store_true", help="log to wandb; default false unless flag is given")
 
 group = parser.add_argument_group("substrate")
 group.add_argument("--substrate", type=str, default='boids', help="name of the substrate")
@@ -47,6 +54,9 @@ def parse_args(*args, **kwargs):
     return args
 
 def main(args):
+    if args.wandb:
+        run = wandb.init(project="alife-project", group="original-asal", entity="ucl-asal", config=vars(args))
+
     prompts = args.prompts.split(";")
     if args.time_sampling < len(prompts): # doing multiple prompts
         args.time_sampling = len(prompts)
@@ -58,6 +68,10 @@ def main(args):
     if args.rollout_steps is None:
         args.rollout_steps = substrate.rollout_steps
     rollout_fn = partial(rollout_simulation, s0=None, substrate=substrate, fm=fm, rollout_steps=args.rollout_steps, time_sampling=(args.time_sampling, True), img_size=224, return_state=False)
+
+    rollout_fn_animate = partial(rollout_simulation, s0=None, substrate=substrate, fm=None, rollout_steps=substrate.rollout_steps, time_sampling='video', img_size=224,
+        return_state=False,
+        )
 
     z_txt = fm.embed_txt(prompts) # P D
 
@@ -89,6 +103,7 @@ def main(args):
         loss, loss_dict = jax.tree.map(lambda x: x.mean(axis=1), (loss, loss_dict)) # mean over the init state rng
         next_es_state = strategy.tell(params, loss, next_es_state, es_params)
         data = dict(best_loss=next_es_state.best_fitness, loss_dict=loss_dict)
+        # print("loss dict", jax.tree_util.tree_map(lambda x: x.shape, loss_dict))
         return next_es_state, data
 
     data = []
@@ -104,6 +119,31 @@ def main(args):
             util.save_pkl(args.save_dir, "data", data_save)
             best = jax.tree.map(lambda x: np.array(x), (es_state.best_member, es_state.best_fitness))
             util.save_pkl(args.save_dir, "best", best)
+
+
+        # Log losses to wandb
+        if args.wandb:
+            run.log({"best_loss": di["best_loss"]})
+            best_losses = jax.tree_util.tree_map(lambda x: jnp.min(x), di['loss_dict'])
+            run.log({k: v for k, v in best_losses.items()})
+            # losses = di['loss_dict']
+            # run.log({k: np.array(v) for k, v in losses.items()})
+
+            if i_iter % (args.n_iters//10)==0:
+                # Log the best video to wandb
+                params, best_loss = util.load_pkl(args.save_dir, "best")
+                
+                rng = jax.random.PRNGKey(args.seed)
+
+                rollout_data = rollout_fn_animate(rng, params)
+
+                img = np.array(rollout_data['rgb']*255).clip(0,255).astype(np.uint8) # rescale to channels, because activations are between 0 and 1
+                
+                img = rearrange(img, "T H W D -> T D H W")
+
+                idx = int(i_iter/args.n_iters * 10)
+                run.log({f"rollout_{idx}": wandb.Video(img, fps=30)}) #rollout_n is n/10 of the way through the run
+    
 
 if __name__ == '__main__':
     main(parse_args())
