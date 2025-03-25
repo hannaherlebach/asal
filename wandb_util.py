@@ -7,8 +7,12 @@ from functools import partial
 from rollout import rollout_simulation
 
 class WandbLogger:
-    def __init__(self, project, group, entity, config, substrate):
+    def __init__(self, project, group, entity, config, substrate=None):
         self.run = wandb.init(project=project, group=group, entity=entity, config=config)
+        if substrate is not None: # hacky fix later
+            self.initialise_rollout(substrate)
+
+    def initialise_rollout(self, substrate):
         self.rollout_fn = partial(rollout_simulation, s0=None, substrate=substrate, fm=None, rollout_steps=substrate.rollout_steps, time_sampling='video', img_size=224, return_state=False)
 
     def initialise_prompt_logging(self):
