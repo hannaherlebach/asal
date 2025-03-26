@@ -35,7 +35,7 @@ class WandbLogger:
         best_losses = jax.tree_util.tree_map(lambda x: jnp.min(x), data['loss_dict'])
         self.run.log({k: v for k, v in best_losses.items()})
 
-    def log_video(self, rng, params, name, caption, rgb=False, fps=30):
+    def log_video(self, rng, params, name, caption="", rgb=False, fps=30):
         """
         Takes rng and current best params, and logs a rollout video.
         Args:
