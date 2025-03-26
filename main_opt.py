@@ -122,12 +122,15 @@ def main(args):
         if args.wandb:
             wandb_logger.log_losses(di)
 
-            if i_iter % (args.n_iters//10)==0:
+            if i_iter % (args.n_iters//10)==0 or i_iter==args.n_iters-1:
                 # Log the best video to wandb
                 params, best_loss = util.load_pkl(args.save_dir, "best")
                 rng = jax.random.PRNGKey(args.seed)
-                idx = int(i_iter/args.n_iters * 10)
-                wandb_logger.log_video(rng, params, f"rollout_{idx}") #rollout_n is n/10 of the way through the run
+                if i_iter==args.n_iters-1:
+                    name = "rollout_final"
+                else:
+                    name = f"rollout_{int(i_iter/args.n_iters * 10)}"
+                wandb_logger.log_video(rng, params, name) #rollout_n is n/10 of the way through the run
     
 
 if __name__ == '__main__':
